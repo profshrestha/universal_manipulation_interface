@@ -73,11 +73,16 @@ def main(input_dir, camera_intrinsics, aruco_yaml, num_workers):
                     cmd))
                 # futures.add(executor.submit(lambda x: print(' '.join(x)), cmd))
 
-            completed, futures = concurrent.futures.wait(futures)            
+            completed, futures = concurrent.futures.wait(futures)
             pbar.update(len(completed))
 
-    print("Done! Result:")
-    print([x.result() for x in completed])
+    results = [x.result() for x in completed]
+    failures = [r for r in results if r.returncode != 0]
+    if failures:
+        print(f"Warning: {len(failures)} ArUco detection(s) failed:")
+        for r in failures:
+            print(r.stderr.decode(errors='replace')[-500:])
+    print(f"Done! {len(results) - len(failures)}/{len(results)} succeeded.")
 
 # %%
 if __name__ == "__main__":

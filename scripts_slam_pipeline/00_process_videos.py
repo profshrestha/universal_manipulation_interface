@@ -84,11 +84,22 @@ def main(session_dir):
         with ExifToolHelper() as et:
             for mp4_path in input_mp4_paths:
                 if mp4_path.is_symlink():
-                    print(f"Skipping {mp4_path.name}, already moved.")
-                    continue
+                    resolved = mp4_path.resolve()
+                    if not resolved.exists():
+                        print(f"Skipping {mp4_path.name}: broken symlink (target does not exist)")
+                        continue
+                    if resolved.is_relative_to(output_dir):
+                        # symlink created by a previous pipeline run pointing into demos/ — already done
+                        continue
+                    # symlink to an external source (user-prepared session) — hard-link the target
+                    external_symlink = True
+                else:
+                    external_symlink = False
 
-                start_date = mp4_get_start_datetime(str(mp4_path))
-                meta = list(et.get_metadata(str(mp4_path)))[0]
+                source_path = mp4_path.resolve() if external_symlink else mp4_path
+
+                start_date = mp4_get_start_datetime(str(source_path))
+                meta = list(et.get_metadata(str(source_path)))[0]
                 cam_serial = meta['QuickTime:CameraSerialNumber']
                 out_dname = 'demo_' + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
 
@@ -97,22 +108,28 @@ def main(session_dir):
                     out_dname = "mapping"
                 elif mp4_path.name.startswith('gripper_cal') or mp4_path.parent.name.startswith('gripper_cal'):
                     out_dname = "gripper_calibration_" + cam_serial + '_' + start_date.strftime(r"%Y.%m.%d_%H.%M.%S.%f")
-                
+
                 # create directory
                 this_out_dir = output_dir.joinpath(out_dname)
                 this_out_dir.mkdir(parents=True, exist_ok=True)
-                
-                # move videos
+
                 vfname = 'raw_video.mp4'
                 out_video_path = this_out_dir.joinpath(vfname)
-                shutil.move(mp4_path, out_video_path)
 
-                # create symlink back from original location
-                # relative_to's walk_up argument is not avaliable until python 3.12
-                dots = os.path.join(*['..'] * len(mp4_path.parent.relative_to(session).parts))
-                rel_path = str(out_video_path.relative_to(session))
-                symlink_path = os.path.join(dots, rel_path)                
-                mp4_path.symlink_to(symlink_path)
+                if external_symlink:
+                    # hard-link the real file into demos/; leave the original symlink in place
+                    try:
+                        os.link(source_path, out_video_path)
+                    except OSError:
+                        shutil.copy2(str(source_path), str(out_video_path))
+                else:
+                    shutil.move(mp4_path, out_video_path)
+                    # create symlink back from original location
+                    # relative_to's walk_up argument is not avaliable until python 3.12
+                    dots = os.path.join(*['..'] * len(mp4_path.parent.relative_to(session).parts))
+                    rel_path = str(out_video_path.relative_to(session))
+                    symlink_path = os.path.join(dots, rel_path)
+                    mp4_path.symlink_to(symlink_path)
 
 # %%
 if __name__ == '__main__':

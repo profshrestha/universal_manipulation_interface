@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """
 Main script for UMI SLAM pipeline.
 python run_slam_pipeline.py <session_dir>
@@ -19,7 +20,15 @@ import subprocess
 @click.command()
 @click.argument('session_dir', nargs=-1)
 @click.option('-c', '--calibration_dir', type=str, default=None)
-def main(session_dir, calibration_dir):
+@click.option('-nz', '--nominal_z', type=float, default=0.057,
+    help='Expected Z distance (m) from camera to finger tags. '
+         'Default 0.057 m is calibrated for ISL RX150 with 16 mm ArUco tags. '
+         'Standard UMI gripper (22 mm tags) uses 0.072 m. '
+         'To measure: run step 04, then inspect tag_detection.pkl tvec[2] values.')
+@click.option('-o', '--output', type=str, default=None,
+    help='Output path for replay_buffer.zarr.zip. '
+         'Defaults to <session_dir>/replay_buffer.zarr.zip')
+def main(session_dir, calibration_dir, nominal_z, output):
     script_dir = pathlib.Path(__file__).parent.joinpath('scripts_slam_pipeline')
     if calibration_dir is None:
         calibration_dir = pathlib.Path(__file__).parent.joinpath('example', 'calibration')
@@ -29,6 +38,8 @@ def main(session_dir, calibration_dir):
 
     for session in session_dir:
         session = pathlib.Path(os.path.expanduser(session)).absolute()
+
+        out_path = pathlib.Path(output) if output else session.joinpath('replay_buffer.zarr.zip')
 
         print("############## 00_process_videos #############")
         script_path = script_dir.joinpath("00_process_videos.py")
@@ -100,6 +111,7 @@ def main(session_dir, calibration_dir):
         assert script_path.is_file()
         cmd = [
             'python', str(script_path),
+            '--nominal_z', str(nominal_z),
             str(session)
         ]
         result = subprocess.run(cmd)
@@ -110,10 +122,24 @@ def main(session_dir, calibration_dir):
         assert script_path.is_file()
         cmd = [
             'python', str(script_path),
-            '--input', str(session)
+            '--input', str(session),
+            '--nominal_z', str(nominal_z)
         ]
         result = subprocess.run(cmd)
         assert result.returncode == 0
+
+        print("############# 07_generate_replay_buffer ###########")
+        script_path = script_dir.joinpath("07_generate_replay_buffer.py")
+        assert script_path.is_file()
+        cmd = [
+            'python', str(script_path),
+            str(session),
+            '--output', str(out_path)
+        ]
+        result = subprocess.run(cmd)
+        assert result.returncode == 0
+
+        print(f"\nPipeline complete. Replay buffer saved to: {out_path}")
 
 ## %%
 if __name__ == "__main__":

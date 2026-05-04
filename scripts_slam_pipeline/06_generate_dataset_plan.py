@@ -121,9 +121,10 @@ def main(input, output, tcp_offset, tx_slam_tag,
     # load gripper calibration
     gripper_id_gripper_cal_map = dict()
     cam_serial_gripper_cal_map = dict()
+    nan_gripper_entries = []  # (gripper_id, cam_serial) pairs whose calibration had NaN
 
     with ExifToolHelper() as et:
-        for gripper_cal_path in demos_dir.glob("gripper*/gripper_range.json"):
+        for gripper_cal_path in sorted(demos_dir.glob("gripper*/gripper_range.json")):
             mp4_path = gripper_cal_path.parent.joinpath('raw_video.mp4')
             meta = list(et.get_metadata(str(mp4_path)))[0]
             cam_serial = meta['QuickTime:CameraSerialNumber']
@@ -132,6 +133,13 @@ def main(input, output, tcp_offset, tx_slam_tag,
             gripper_id = gripper_range_data['gripper_id']
             max_width = gripper_range_data['max_width']
             min_width = gripper_range_data['min_width']
+
+            if np.isnan(max_width) or np.isnan(min_width):
+                print(f"Warning: gripper {gripper_id} (camera {cam_serial}) has NaN calibration widths. "
+                      "Will use another gripper's range as fallback.")
+                nan_gripper_entries.append((gripper_id, cam_serial))
+                continue
+
             gripper_cal_data = {
                 'aruco_measured_width': [min_width, max_width],
                 'aruco_actual_width': [min_width, max_width]
@@ -139,6 +147,16 @@ def main(input, output, tcp_offset, tx_slam_tag,
             gripper_cal_interp = get_gripper_calibration_interpolator(**gripper_cal_data)
             gripper_id_gripper_cal_map[gripper_id] = gripper_cal_interp
             cam_serial_gripper_cal_map[cam_serial] = gripper_cal_interp
+
+    # fill in NaN grippers using the first valid calibration (same hardware)
+    if nan_gripper_entries:
+        if not gripper_id_gripper_cal_map:
+            raise RuntimeError("All gripper calibrations have NaN widths — cannot proceed.")
+        fallback_interp = next(iter(gripper_id_gripper_cal_map.values()))
+        for gripper_id, cam_serial in nan_gripper_entries:
+            gripper_id_gripper_cal_map[gripper_id] = fallback_interp
+            cam_serial_gripper_cal_map[cam_serial] = fallback_interp
+            print(f"  Gripper {gripper_id}: using fallback calibration range.")
 
     
     # %% stage 1
@@ -662,7 +680,6 @@ def main(input, output, tcp_offset, tx_slam_tag,
                 gripper_cal_interp = gripper_id_gripper_cal_map[ghi]
             elif row['camera_serial'] in cam_serial_gripper_cal_map:
                 gripper_cal_interp = cam_serial_gripper_cal_map[row['camera_serial']]
-                print(f"Gripper id {ghi} not found in gripper calibrations {list(gripper_id_gripper_cal_map.keys())}. Falling back to camera serial map.")
             else:
                 raise RuntimeError("Gripper calibration not found.")
 
